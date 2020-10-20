@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include "platform.h"
 
+#define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 #include "mqtt_client.h"
 #include "mqtt_msg.h"
 #include "esp_transport.h"
@@ -772,12 +773,15 @@ esp_err_t esp_mqtt_client_set_uri(esp_mqtt_client_handle_t client, const char *u
 
 static esp_err_t mqtt_write_data(esp_mqtt_client_handle_t client)
 {
+ESP_LOGE(TAG, "mqtt_write_data %d; len = %d", client->event.msg_id, client->mqtt_state.outbound_message->length);
+
     int write_len = esp_transport_write(client->transport,
                                         (char *)client->mqtt_state.outbound_message->data,
                                         client->mqtt_state.outbound_message->length,
                                         client->config->network_timeout_ms);
     // client->mqtt_state.pending_msg_type = mqtt_get_type(client->mqtt_state.outbound_message->data);
     if (write_len <= 0) {
+ESP_LOGE(TAG, "mqtt_write_data error");
         client->event.event_id = MQTT_EVENT_ERROR;
         client->event.error_handle->error_type = MQTT_ERROR_TYPE_ESP_TLS;
         client->event.error_handle->connect_return_code = 0;
@@ -1218,6 +1222,7 @@ static void esp_mqtt_task(void *pv)
     client->state = MQTT_STATE_INIT;
     xEventGroupClearBits(client->status_bits, STOPPED_BIT);
     while (client->run) {
+ESP_LOGD(TAG, "MQTT client->run");
         MQTT_API_LOCK(client);
         switch ((int)client->state) {
         case MQTT_STATE_INIT:
@@ -1269,6 +1274,8 @@ static void esp_mqtt_task(void *pv)
                 esp_mqtt_abort_connection(client);
                 break;
             }
+
+ESP_LOGD(TAG, "MQTT client->run: CONNECTED");
             // receive and process data
             if (mqtt_process_receive(client) == ESP_FAIL) {
                 esp_mqtt_abort_connection(client);
@@ -1278,18 +1285,25 @@ static void esp_mqtt_task(void *pv)
             // resend all non-transmitted messages first
             outbox_item_handle_t item = outbox_dequeue(client->outbox, QUEUED, NULL);
             if (item) {
+ESP_LOGD(TAG, "MQTT client->run: RESEND/New");
                 if (mqtt_resend_queued(client, item) == ESP_OK) {
                     outbox_set_pending(client->outbox, client->mqtt_state.pending_msg_id, TRANSMITTED);
                 }
                 // resend other "transmitted" messages after 1s
-            } else if (platform_tick_get_ms() - last_retransmit > 1000) {
+            } else if (platform_tick_get_ms() - last_retransmit > 100) {
+ESP_LOGD(TAG, "MQTT client->run: RESEND/Old");
                 last_retransmit = platform_tick_get_ms();
                 item = outbox_dequeue(client->outbox, TRANSMITTED, &msg_tick);
-                if (item && (last_retransmit - msg_tick > 1000))  {
+                // JC If there is an item, and msg_tick (last sent) 
+                // if (item && (last_retransmit - msg_tick > 1000))  {
+                //            bigger....       smaller
+                // JC reduce retry interval of make it a variable
+                if (item && (last_retransmit - msg_tick > 100))  {
                     mqtt_resend_queued(client, item);
                 }
             }
 
+ESP_LOGD(TAG, "MQTT client->run: TICK");
             if (platform_tick_get_ms() - client->keepalive_tick > client->connect_info.keepalive * 1000 / 2) {
                 //No ping resp from last ping => Disconnected
                 if (client->wait_for_ping_resp) {
@@ -1315,14 +1329,18 @@ static void esp_mqtt_task(void *pv)
                 client->state = MQTT_STATE_INIT;
             }
 
+ESP_LOGD(TAG, "MQTT client->run: PRUNE");
             //Delete message after 30 seconds
             int deleted = outbox_delete_expired(client->outbox, platform_tick_get_ms(), OUTBOX_EXPIRED_TIMEOUT_MS);
             client->mqtt_state.pending_msg_count -= deleted;
             if (client->mqtt_state.pending_msg_count < 0) {
                 client->mqtt_state.pending_msg_count = 0;
             }
+ESP_LOGD(TAG, "MQTT client->run: PENDING %d", client->mqtt_state.pending_msg_count);
             //
+ESP_LOGD(TAG, "MQTT client->run: outbox_get_size %d", outbox_get_size(client->outbox));
             outbox_cleanup(client->outbox, OUTBOX_MAX_SIZE);
+ESP_LOGD(TAG, "MQTT client->run: outbox_get_size %d POST CLEANUP", outbox_get_size(client->outbox));
             break;
         case MQTT_STATE_WAIT_TIMEOUT:
 

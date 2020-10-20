@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "sys/queue.h"
+#define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 #include "esp_log.h"
 
 #ifndef CONFIG_MQTT_CUSTOM_OUTBOX
@@ -71,13 +72,16 @@ outbox_item_handle_t outbox_dequeue(outbox_handle_t outbox, pending_state_t pend
 {
     outbox_item_handle_t item;
     STAILQ_FOREACH(item, outbox, next) {
+ESP_LOGD(TAG, "outbox_dequeue search item->msg_id %d, state %d", item->msg_id, pending);
         if (item->pending == pending) {
             if (tick) {
                 *tick = item->tick;
             }
+ESP_LOGD(TAG, "outbox_dequeue search item->msg_id FOUND %d", item->msg_id);
             return item;
         }
     }
+ESP_LOGD(TAG, "outbox_dequeue search item->msg_id NO STATE %d", pending);
     return NULL;
 }
 
@@ -86,6 +90,7 @@ uint8_t *outbox_item_get_data(outbox_item_handle_t item,  size_t *len, uint16_t 
     if (item) {
         *len = item->len;
         *msg_id = item->msg_id;
+ESP_LOGD(TAG, "outbox_item_get_data msgid=%d", *msg_id); // JC
         *msg_type = item->msg_type;
         *qos = item->msg_qos;
         return (uint8_t *)item->buffer;
